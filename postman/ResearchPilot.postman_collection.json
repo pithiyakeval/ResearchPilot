@@ -1,0 +1,432 @@
+{
+  "info": {
+    "_postman_id": "6c1f6a8e-6b0d-4f43-9a1e-5c7d2f0b9a11",
+    "name": "ResearchPilot API",
+    "description": "Local HTTP API for ResearchPilot. Select the 'ResearchPilot local' environment (baseUrl, default http://127.0.0.1:8000). Submitting a job runs research with the configured local Ollama model; a web-mode job also calls the Parallel Search MCP server. Send requests by hand; nothing here runs automatically. Errors are application/problem+json bodies with a stable 'code'. See README 'HTTP API'.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health and readiness",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Is the API process running? Always 200 while it runs; never contacts Ollama or the database."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Liveness is 200 with status ok\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql(\"ok\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Can the API accept and run jobs? 200 with checks ollama, jobs and history 'ok'. Otherwise 503 with a code: jobs_unavailable (worker stopped; restart), history_unavailable (database unreachable or lock held elsewhere; retry), history_schema_outdated (run migrations), history_unconfigured (set RESEARCHPILOT_DATABASE_URL) or ollama_unavailable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Readiness is 200, or 503 with a known code\", function () {",
+                  "    pm.expect([200, 503]).to.include(pm.response.code);",
+                  "    if (pm.response.code === 200) {",
+                  "        pm.expect(pm.response.json().checks).to.eql(",
+                  "            { ollama: \"ok\", jobs: \"ok\", history: \"ok\" });",
+                  "    } else {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\"))",
+                  "            .to.include(\"application/problem+json\");",
+                  "        pm.expect([",
+                  "            \"jobs_unavailable\", \"history_unavailable\",",
+                  "            \"history_schema_outdated\", \"history_unconfigured\",",
+                  "            \"ollama_unavailable\"",
+                  "        ]).to.include(pm.response.json().code);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "Submit research job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What does the supplied material say about System Alpha's task completion?\",\n  \"source_material\": \"# Source A: Task completion\\n\\nIn a fictional internal test, System Alpha completed 85 of 100 tasks.\\n\\n# Source B: Evaluation limitations\\n\\nThe same fictional test used one dataset, so the result may not generalize.\",\n  \"web\": false,\n  \"label\": \"Manual API test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs"
+              ]
+            },
+            "description": "Starts research with the local Ollama model (several minutes on CPU). 202 with the job status (state 'queued'); its id is saved as {{jobId}}. Errors: 422 validation_failed or input_too_large, 413 content_too_large, 503 queue_full (Retry-After), jobs_unavailable or history_*. 'label' is optional (trimmed, at most 120 characters, no control characters) and is stored with the job, not returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Job accepted (202) as queued, with a Location header\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "    const job = pm.response.json();",
+                  "    pm.environment.set(\"jobId\", job.id);",
+                  "    pm.expect(job.state).to.eql(\"queued\");",
+                  "    pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/api/v1/jobs/\" + job.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Job status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs",
+                "{{jobId}}"
+              ]
+            },
+            "description": "The job's lifecycle state. 'queued' and 'running' are normal: send again until it is 'succeeded', 'failed' or 'cancelled'. A failed job has failure.code and failure.message (for example interrupted_by_restart). Jobs from before a restart are read from history. 404 job_not_found; 503 history_unavailable when its outcome is not durably recorded or history cannot be read."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200 with a known state\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const job = pm.response.json();",
+                  "    pm.expect([",
+                  "        \"queued\", \"running\", \"succeeded\", \"failed\", \"cancelled\"",
+                  "    ]).to.include(job.state);",
+                  "    if (job.state === \"queued\" || job.state === \"running\") {",
+                  "        console.log(\"Job still in progress; send this request again.\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Job result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}/result",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs",
+                "{{jobId}}",
+                "result"
+              ]
+            },
+            "description": "The ResearchResult of a succeeded job (200). Otherwise 409: job_not_finished (not an error; poll the status), job_failed or job_cancelled. 404 job_not_found; 503 history_unavailable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Result is 200, or 409 until the job succeeds\", function () {",
+                  "    pm.expect([200, 409]).to.include(pm.response.code);",
+                  "    if (pm.response.code === 200) {",
+                  "        pm.expect(pm.response.json()).to.have.property(\"report\");",
+                  "    } else {",
+                  "        pm.expect([",
+                  "            \"job_not_finished\", \"job_failed\", \"job_cancelled\"",
+                  "        ]).to.include(pm.response.json().code);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Submit job to cancel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What does the supplied material say about System Alpha's task completion?\",\n  \"source_material\": \"# Source A: Task completion\\n\\nIn a fictional internal test, System Alpha completed 85 of 100 tasks.\\n\\n# Source B: Evaluation limitations\\n\\nThe same fictional test used one dataset, so the result may not generalize.\",\n  \"label\": \"Cancellation test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs"
+              ]
+            },
+            "description": "Send while another job is still running, so this one waits in the queue; its id is saved as {{cancelJobId}}. It runs research if it is not cancelled."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Job accepted (202) as queued, with a Location header\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "    const job = pm.response.json();",
+                  "    pm.environment.set(\"cancelJobId\", job.id);",
+                  "    pm.expect(job.state).to.eql(\"queued\");",
+                  "    pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/api/v1/jobs/\" + job.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Cancel job",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs/{{cancelJobId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs",
+                "{{cancelJobId}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancels a queued job: 200 with state 'cancelled' (again 200 if already cancelled). 409 job_not_cancellable once it is running or finished; a running job is never interrupted. 404 job_not_found; 503 history_unavailable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Cancelled (200), or 409 if it already started\", function () {",
+                  "    pm.expect([200, 409]).to.include(pm.response.code);",
+                  "    if (pm.response.code === 200) {",
+                  "        pm.expect(pm.response.json().state).to.eql(\"cancelled\");",
+                  "    } else {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"job_not_cancellable\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Examples",
+      "item": [
+        {
+          "name": "Invalid submission (422, no research)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What does the supplied material say about System Alpha's task completion?\",\n  \"source_material\": \"Too short.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs"
+              ]
+            },
+            "description": "Rejected by validation before anything is queued, so no model is called. Field errors name the field, never echo the input."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"422 validation_failed for body.source_material\", function () {",
+                  "    pm.response.to.have.status(422);",
+                  "    const problem = pm.response.json();",
+                  "    pm.expect(problem.code).to.eql(\"validation_failed\");",
+                  "    pm.expect(problem.errors.map(function (error) { return error.field; }))",
+                  "        .to.include(\"body.source_material\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Submit web-mode job (calls Parallel Search MCP)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"How do LangGraph conditional edges route between nodes?\",\n  \"source_material\": \"# Source A: Task completion\\n\\nIn a fictional internal test, System Alpha completed 85 of 100 tasks.\\n\\n# Source B: Evaluation limitations\\n\\nThe same fictional test used one dataset, so the result may not generalize.\",\n  \"web\": true,\n  \"label\": \"Web mode test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs"
+              ]
+            },
+            "description": "Like 'Submit research job', but first runs one bounded search on the public Parallel Search MCP server (network access), then the local model. Its id is saved as {{jobId}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Job accepted (202) as queued, with a Location header\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "    const job = pm.response.json();",
+                  "    pm.environment.set(\"jobId\", job.id);",
+                  "    pm.expect(job.state).to.eql(\"queued\");",
+                  "    pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/api/v1/jobs/\" + job.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

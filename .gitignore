@@ -1,0 +1,36 @@
+
+@'
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Virtual environments and test/tool caches
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated reports
+reports/
+
+# Coverage and build output
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local databases and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+'@ | Set-Content -Encoding utf8 .gitignore

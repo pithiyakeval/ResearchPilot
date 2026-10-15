@@ -1,0 +1,52 @@
+[project]
+name = "researchpilot"
+version = "0.1.0"
+description = "A source-grounded AI research assistant built with Python and LangChain."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.15,<2",
+    "fastapi>=0.139,<0.140",
+    "langchain-core>=1.0.0",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.15",
+    "mcp>=2.0,<3.0",
+    "psycopg[binary]>=3.2.3,<4",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "rich>=13.9.0",
+    "sqlalchemy>=2.0.40,<2.1",
+    "typer>=0.15.0",
+    "uvicorn>=0.54,<1.0",
+]
+
+[project.scripts]
+researchpilot = "researchpilot.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/researchpilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = [
+    "live: needs a running Ollama server; opt in with RESEARCHPILOT_LIVE_TESTS=1",
+    "live_mcp: calls the public Parallel Search MCP server; opt in with RESEARCHPILOT_LIVE_MCP_TESTS=1",
+    "postgres: needs a disposable PostgreSQL database; opt in with RESEARCHPILOT_TEST_DATABASE_URL",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
