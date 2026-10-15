@@ -1,7 +1,7 @@
 [project]
 name = "researchpilot"
 version = "0.1.0"
-description = "A source-grounded AI research assistant built with Python and LangChain."
+description = "Local-first, source-grounded research assistant: a LangGraph workflow on Ollama, with a CLI and a FastAPI job API backed by PostgreSQL history."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
