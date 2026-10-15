@@ -1528,6 +1528,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-ollama" },
     { name = "langgraph" },
@@ -1537,6 +1538,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "rich" },
     { name = "sqlalchemy" },
+    { name = "starlette" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -1552,6 +1554,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.15,<2" },
     { name = "fastapi", specifier = ">=0.139,<0.140" },
+    { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "langchain-core", specifier = ">=1.0.0" },
     { name = "langchain-ollama", specifier = ">=1.1.0" },
     { name = "langgraph", specifier = ">=1.2.15" },
@@ -1561,6 +1564,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.6.0" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "sqlalchemy", specifier = ">=2.0.40,<2.1" },
+    { name = "starlette", specifier = ">=0.46,<2" },
     { name = "typer", specifier = ">=0.15.0" },
     { name = "uvicorn", specifier = ">=0.54,<1.0" },
 ]
