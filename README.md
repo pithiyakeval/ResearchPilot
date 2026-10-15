@@ -8,16 +8,21 @@ ResearchPilot answers a research question from source material you supply. A loc
 
 ```mermaid
 flowchart TB
-    subgraph entry["Entry points"]
-        CLI["CLI<br/>(Typer)"]
-        API["HTTP API<br/>(FastAPI, background job worker)"]
-    end
+    CLI["CLI<br/>(Typer)"]
+    API["HTTP API<br/>(FastAPI, background job worker)"]
 
     subgraph pipeline["Shared research pipeline"]
-        Validate["Input validation<br/>and context budget"]
-        Web["Optional web retrieval<br/>(Parallel Search MCP)"]
-        Graph["LangGraph workflow<br/>analyze → evaluate → report"]
-        Checks["Citation-ID check<br/>and review hints"]
+        Validate["Input validation<br/>and context-budget check"]
+        Web["Web retrieval<br/>(Parallel Search MCP)"]
+        subgraph workflow["LangGraph workflow"]
+            Analyze["analyze"]
+            Evaluate["evaluate"]
+            Report["generate_report"]
+            Analyze --> Evaluate
+            Evaluate -- "analysis gaps remain,<br/>passes below limit" --> Analyze
+            Evaluate -- "complete, invalid<br/>or pass limit reached" --> Report
+        end
+        Checks["Citation-ID check and review hints<br/>(code, not a model call)"]
     end
 
     Ollama["Ollama<br/>(local model)"]
@@ -26,20 +31,20 @@ flowchart TB
     CLI --> Validate
     API --> Validate
     Validate -. "web mode only" .-> Web
-    Web -.-> Graph
-    Validate --> Graph
-    Graph <--> Ollama
-    Graph --> Checks
-    API <--> History
+    Web -. "web sources" .-> Analyze
+    Validate --> Analyze
+    workflow -. "model calls" .-> Ollama
+    Report --> Checks
+    API -- "job records and reads" --> History
 ```
 
-The CLI and the HTTP API run the same pipeline. The LangGraph workflow calls a local Ollama model for analysis, evaluation and the report. Web retrieval runs only when requested. The API records every job's lifecycle in PostgreSQL, so jobs stay readable after a restart.
+The CLI and the HTTP API run the same pipeline. Each LangGraph node calls the local Ollama model; evaluation sends the run back to analysis only while analysis gaps remain, and the pass limit always ends the loop. After the report is written, code checks that its citation IDs refer to supplied sources and adds heuristic review hints; it does not verify that a source supports a claim. Web retrieval runs only when requested. The API's job worker records each job's lifecycle and result in PostgreSQL, which the API reads back after a restart; the model and the graph never use the database.
 
 ## Key features
 
 - **Source-grounded reports.** Supplied sources are numbered `[S1]`, `[S2]`, ... and the report cites them by ID.
 - **Bounded analysis loop.** Analyze, evaluate coverage, re-analyze only while gaps remain, and always stop within a configurable pass limit.
-- **Local and cost-free inference.** Ollama (`gemma3:4b` by default); oversized input is rejected, never truncated.
+- **Local inference without a paid model API by default.** Ollama (`gemma3:4b` by default); oversized input is rejected, never truncated.
 - **Citation-ID checks and review hints.** Unknown or internal references are flagged in code; heuristics point out wording a human should review.
 - **Optional web retrieval.** One bounded search through Parallel Search MCP, with URL safety checks and untrusted-content handling.
 - **Evidence capture.** `--save-sources` saves exactly what a run used, for debugging.
