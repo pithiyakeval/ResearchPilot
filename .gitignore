@@ -1,5 +1,4 @@
 
-@'
 # Local environment and secrets
 .env
 .env.*
@@ -33,7 +32,6 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
-'@ | Set-Content -Encoding utf8 .gitignore
 
 # Local Postman workspace metadata
 .postman/
