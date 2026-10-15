@@ -208,6 +208,37 @@ def _gate_allows(gate: Callable[[], bool]) -> bool:
         return False
 
 
+def _seconds(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return round((end - start).total_seconds(), 3)
+
+
+def _event_fields(event: str, record: "_JobRecord", model: str | None) -> dict[str, object]:
+    """Safe, stable fields for a lifecycle event; the caller holds the manager's lock."""
+    # Read defensively: an injected build function may return another type.
+    result = record.result
+    report = getattr(result, "report", None)
+    citations = getattr(result, "citations", None)
+    invalid = getattr(citations, "invalid", None)
+    return {
+        "event": event,
+        "job_id": record.id,
+        "state": str(record.state),
+        "mode": record.mode,
+        "model": model,
+        "queue_seconds": _seconds(record.created_at, record.started_at),
+        "run_seconds": _seconds(record.started_at, record.finished_at),
+        "total_seconds": _seconds(record.created_at, record.finished_at),
+        "failure_code": record.failure.code if record.failure is not None else None,
+        "cancel_reason": record.cancel_reason,
+        "stop_reason": getattr(report, "stop_reason", None),
+        "analysis_passes": getattr(report, "analysis_passes", None),
+        "model_calls": getattr(report, "model_calls", None),
+        "invalid_citations": len(invalid) if isinstance(invalid, list) else None,
+    }
+
+
 def _failure_code(exc: Exception) -> str:
     if isinstance(exc, ResearchPilotError) and exc.code in FAILURE_MESSAGES:
         return exc.code
@@ -229,7 +260,9 @@ class JobManager:
         max_retained: int = 50,
         clock: Callable[[], datetime] = _utc_now,
         id_factory: Callable[[], str] = _new_id,
+        model: str | None = None,
     ) -> None:
+        """``model`` names the configured model in lifecycle logs; it is never contacted here."""
         if max_queued < 1 or max_retained < 1:
             raise ValueError("max_queued and max_retained must be at least 1.")
         self._research = research
@@ -238,6 +271,7 @@ class JobManager:
         self._max_retained = max_retained
         self._clock = clock
         self._id_factory = id_factory
+        self._model = model
         self._cond = threading.Condition()
         self._jobs: dict[str, _JobRecord] = {}
         self._waiting: deque[str] = deque()
@@ -278,6 +312,7 @@ class JobManager:
             partial(build_result, settings=settings),
             max_queued=api_settings.max_queued_jobs,
             max_retained=api_settings.max_retained_jobs,
+            model=settings.ollama_model,
         )
 
     # --- Public API ---
@@ -436,7 +471,7 @@ class JobManager:
         self._jobs[record.id] = record
         self._waiting.append(record.id)
         self._cond.notify_all()
-        logger.info("Job %s queued mode=%s", record.id, record.mode)
+        self._log_event("job_queued", record)
         return self._snapshot(record)
 
     def _snapshot(self, record: _JobRecord, *, queued: bool = True) -> JobSnapshot:
@@ -482,7 +517,25 @@ class JobManager:
             self._to_record.append(self._snapshot(record))
         self._finished.append(record.id)
         self._evict()
-        logger.info("Job %s %s", record.id, state)
+        self._log_event("job_finished", record)
+
+    def _log_event(self, event: str, record: _JobRecord) -> None:
+        """One structured lifecycle log line, also passed as ``extra`` fields.
+
+        Holds only identifiers, states, timings, fixed codes and run counters: never the
+        question, source material, report text, prompts or exception messages.
+        """
+        try:
+            fields = _event_fields(event, record, self._model)
+        except Exception as exc:  # noqa: BLE001 - logging must never break the job lifecycle
+            logger.warning("Job %s %s fields unavailable: %s", record.id, event, type(exc).__name__)
+            return
+        message = " ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if value is not None and key not in ("event", "job_id")
+        )
+        logger.info("Job %s %s %s", record.id, event, message, extra={"job_event": fields})
 
     def _evict(self) -> None:
         """Forget the oldest finished jobs beyond the retention limit.
@@ -532,7 +585,8 @@ class JobManager:
             assert job_input is not None
             if recorder is not None and not self._record_start(recorder, record, running):
                 continue  # failed without running research
-            logger.info("Job %s running", record.id)
+            with self._cond:
+                self._log_event("job_started", record)
             keep_working = self._run(record, job_input)
             job_input = None
             self._flush_records()
