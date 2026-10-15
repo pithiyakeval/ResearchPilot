@@ -369,6 +369,37 @@ $env:RESEARCHPILOT_LIVE_TESTS = "1"; uv run pytest tests/live -v; Remove-Item En
 $env:RESEARCHPILOT_LIVE_MCP_TESTS = "1"; uv run pytest tests/live/test_live_parallel_mcp.py -v; Remove-Item Env:RESEARCHPILOT_LIVE_MCP_TESTS
 ```
 
+### Deterministic evaluation
+
+`tests/eval/test_golden_cases.py` runs a small golden set through the real pipeline with scripted model replies and a fake web gatherer, and compares run metrics from `researchpilot.evaluation` with explicit expectations: stop reason, analysis passes and pass-limit compliance, model calls, citation problems, source coverage, evaluator-reply validity, web-source numbering, neutralized label text in web pages, and failure categories. The metrics describe process and structure only; they do not judge whether a report is correct or whether a source supports a claim. Add a case by appending to `CASES`. Live-model evaluation is not part of CI.
+
+### Continuous integration
+
+GitHub Actions runs on pull requests to `main`, pushes to `main` and on demand. It uses only `uv.lock` (`uv sync --locked`), fake models and a disposable database; no Ollama, web search, paid API or secret is involved.
+
+| Workflow | Job | What it checks |
+|---|---|---|
+| CI | Lint and format (Ruff) | `ruff check .` and `ruff format --check .` |
+| CI | Offline tests (Linux, Python 3.12 / Linux, Python 3.13 / Windows, Python 3.13) | `pytest -m "not postgres and not live and not live_mcp"`, with JUnit and informational coverage |
+| CI | PostgreSQL integration tests | Alembic upgrade, downgrade and upgrade through `alembic.ini`, then every `postgres` test against a `postgres:17` service container; fails if any is skipped |
+| CI | Package build | `uv build`; the wheel must contain every migration file; the wheel is installed with locked dependencies in a throwaway environment and imported |
+| Security | Dependency audit (pip-audit, advisory) | Known vulnerabilities in the locked packages, split into fixable and not yet fixed |
+| Security | Workflow security lint (zizmor, advisory) | Permissions, pinning, credential persistence and injection risks in the workflows |
+
+The Security workflow also runs weekly and never fails the build: findings appear as warnings and in the run summary. A fixable finding is actionable (update the package); one without a fix needs tracking. Dependabot proposes weekly, grouped updates for Python packages and actions. Test reports, coverage, audit results and the built package are attached to each run as artifacts for 14 days (the run's **Summary** page, **Artifacts**).
+
+To run the same checks locally:
+
+```powershell
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -m "not postgres and not live and not live_mcp"
+uv build
+```
+
+Repository protection and settings that must be configured by hand are listed in [docs/maintainers.md](docs/maintainers.md).
+
 ## Project structure
 
 ```text
@@ -389,6 +420,7 @@ src/researchpilot/
 ├── web_research.py   # web retrieval: URL checks, limits, web sources
 ├── parallel_mcp.py   # Parallel Search MCP client
 ├── errors.py         # typed errors for a research run
+├── evaluation.py     # deterministic run metrics for regression evaluation
 ├── config.py         # validated settings
 ├── api/              # FastAPI app, job manager, routes, problem responses, history integration
 └── history/          # PostgreSQL job history: models, store, advisory lock, Alembic migrations
@@ -399,6 +431,7 @@ tests/
 ├── fakes.py          # scripted model, fake Parallel client and fake history
 ├── test_*.py         # offline tests for the research engine and CLI
 ├── api/              # offline API tests, plus opt-in PostgreSQL API tests
+├── eval/             # deterministic golden cases for run metrics
 ├── history/          # offline history tests, plus opt-in PostgreSQL tests
 ├── manual/           # sample source files for manual CLI runs
 └── live/             # opt-in live tests (Ollama, Parallel Search MCP)
@@ -413,4 +446,6 @@ tests/
 - **Output is Markdown,** not yet a strict structured report schema.
 - **Token counts are estimated** from character length, not measured with the model's tokenizer, and may be off for non-English text or code.
 - **Runs are slow on CPU.** A run makes 3–5 model calls by default.
-- **The HTTP API is not production-ready.** It is single-instance and intended for local use only: no authentication, no CORS configuration, no job listing, and no tracing or UI.
+- **The HTTP API is not production-ready.** It is single-instance and intended for local use only: no authentication, no CORS configuration, no job listing, and no UI. There is no deployment target or container image.
+- **Observability is logs only.** Job lifecycle events are logged with timings, stop reasons and failure codes (never source text); there are no metrics, tracing or dashboards.
+- **Evaluation is structural.** The golden cases check process and citation-ID metrics with scripted replies; they say nothing about the quality of real model output.
