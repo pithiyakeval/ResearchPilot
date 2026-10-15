@@ -464,6 +464,34 @@ jobs:
               print(f"  {name}")
           EOF
 
+      # Installs the wheel into a throwaway virtual environment on this runner with exactly
+      # the locked runtime dependencies (hash-checked), then imports the API and CLI and
+      # finds the migrations through the installed package. Nothing is deployed or kept.
+      - name: Smoke-test the installed wheel with locked dependencies
+        run: |
+          smoke="${RUNNER_TEMP}/wheel-smoke"
+          uv export --locked --no-dev --no-emit-project --format requirements-txt \
+            --output-file "${RUNNER_TEMP}/runtime-requirements.txt"
+          uv venv "${smoke}" --python 3.13
+          uv pip install --python "${smoke}" --require-hashes \
+            --requirement "${RUNNER_TEMP}/runtime-requirements.txt"
+          uv pip install --python "${smoke}" --no-deps dist/researchpilot-*.whl
+          uv pip check --python "${smoke}"
+          "${smoke}/bin/python" -I - <<'EOF'
+          from importlib.resources import files
+
+          import researchpilot.api.app  # noqa: F401 - the API imports from the installed wheel
+          import researchpilot.cli  # noqa: F401
+
+          migrations = files("researchpilot.history") / "migrations"
+          revisions = sorted(p.name for p in (migrations / "versions").iterdir() if p.name.endswith(".py"))
+          if not (migrations / "script.py.mako").is_file() or not revisions:
+              raise SystemExit("::error::The installed package has no Alembic migrations.")
+          print(f"Installed package imports; migrations found: {', '.join(revisions)}")
+          EOF
+          "${smoke}/bin/researchpilot" --help > /dev/null
+          echo "The researchpilot console script runs."
+
       - name: Upload the built distributions
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
