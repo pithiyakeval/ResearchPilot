@@ -105,7 +105,7 @@ Smaller models are faster but follow the source-grounding and JSON instructions 
 
 ## Using the CLI
 
-Create `sources.md`, starting each source with a top-level heading and keeping its title and URL with the excerpt:
+Put the sources in a Markdown or text file, starting each source with a top-level heading and keeping its title and URL with the excerpt. `examples/sources.md` is a ready-made sample; `examples/` also holds `complete.md`, `missing_evidence.md` and `untrusted_source.md` for trying a complete run, gaps in the evidence and an injected instruction:
 
 ```markdown
 # Source A: Task completion
@@ -120,8 +120,8 @@ https://example.com/report (excerpt) ...
 Each top-level `#` heading starts a new source, numbered `[S1]`, `[S2]`, ... in order. `##` subheadings and headings inside code blocks stay within their source; text before the first heading becomes its own source, and a file with no headings is a single source. Label-like text inside a source, such as `[S2]`, is rewritten as `(S2)` so one source cannot impersonate another.
 
 ```powershell
-uv run researchpilot "Compare the approaches described in these sources" --source-file .\sources.md
-uv run researchpilot "Summarize the evidence and limitations" --source-file .\sources.md --output .\reports\research-report.md
+uv run researchpilot "Compare the approaches described in these sources" --source-file .\examples\sources.md
+uv run researchpilot "Summarize the evidence and limitations" --source-file .\examples\sources.md --output .\reports\research-report.md
 ```
 
 | Option | Meaning |
@@ -173,7 +173,7 @@ Hints can be wrong in either direction, and a report without hints is not thereb
 To debug a report, save the exact evidence a run used to a new JSON file:
 
 ```powershell
-uv run researchpilot "Summarize the evidence and limitations" --source-file .\sources.md --output .\reports\report.md --save-sources .\reports\report-evidence.json
+uv run researchpilot "Summarize the evidence and limitations" --source-file .\examples\sources.md --output .\reports\report.md --save-sources .\reports\report-evidence.json
 ```
 
 The file holds every source as numbered for the run, each pass's analysis notes and structured evaluation, the stop reason, unresolved gaps, web retrieval counts, the non-secret model settings and report metadata. It never holds full prompts, raw evaluator replies, environment variables or the Ollama base URL. It does hold full source text and analysis notes, which may be private: it is written only when you ask for it, and its contents are never printed or logged.
@@ -203,7 +203,7 @@ The destination is checked before any model or network call (exit code 2 on fail
 ## Web mode
 
 ```powershell
-uv run researchpilot "How do LangGraph conditional edges route between nodes?" --source-file .\sources.md --web
+uv run researchpilot "How do LangGraph conditional edges route between nodes?" --source-file .\examples\sources.md --web
 ```
 
 `--web` (`-w`) adds web evidence to the supplied source file, which is still required. Without it, no MCP connection or network request is made. Before analysis, `researchpilot.web_research` runs:
@@ -425,6 +425,7 @@ src/researchpilot/
 ├── api/              # FastAPI app, job manager, routes, problem responses, history integration
 └── history/          # PostgreSQL job history: models, store, advisory lock, Alembic migrations
 postman/              # Postman collection and local environment for manual API tests
+examples/             # sample source files for manual CLI runs
 alembic.ini           # migration configuration (the URL comes from the environment)
 tests/
 ├── conftest.py       # shared pytest setup
@@ -433,7 +434,6 @@ tests/
 ├── api/              # offline API tests, plus opt-in PostgreSQL API tests
 ├── eval/             # deterministic golden cases for run metrics
 ├── history/          # offline history tests, plus opt-in PostgreSQL tests
-├── manual/           # sample source files for manual CLI runs
 └── live/             # opt-in live tests (Ollama, Parallel Search MCP)
 ```
 

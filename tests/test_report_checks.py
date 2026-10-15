@@ -18,7 +18,7 @@ from researchpilot.service import ResearchService
 from researchpilot.sources import check_citations, number_sources
 from researchpilot.state import initial_state
 
-# Same content as sources.md, used in the live run.
+# Same content as examples/sources.md, used in the live run.
 LOCAL = """# Source A: Hypothetical performance test
 
 In a fictional test involving 100 tasks, System Alpha completed 85 tasks successfully. The test did not report confidence intervals.
