@@ -1,0 +1,38 @@
+# Weekly dependency updates. Each update arrives as a pull request and must pass CI, which
+# installs with `uv sync --locked`, so a pull request whose uv.lock is inconsistent fails.
+version: 2
+updates:
+  # Python dependencies from pyproject.toml and uv.lock.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Wait a week after a release before proposing it, so a compromised or broken release
+    # has time to be noticed and pulled.
+    cooldown:
+      default-days: 7
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # Actions used by the workflows, pinned to commit SHAs; Dependabot updates the SHA and the
+  # version comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Wait a week after a release before proposing it, so a compromised or broken release
+    # has time to be noticed and pulled.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

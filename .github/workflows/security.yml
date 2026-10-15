@@ -1,0 +1,144 @@
+# Advisory security checks: a dependency vulnerability audit of uv.lock and a security lint
+# of the workflows. Findings are reported as warnings and in the job summary; they do not
+# fail the run, so they never block ordinary CI. No secrets are used.
+
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC: new advisories appear without code changes
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.11.26"
+  PIP_AUDIT_VERSION: "2.10.1"
+  ZIZMOR_VERSION: "1.30.1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dependency-audit:
+    name: Dependency audit (pip-audit, advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python 3.13
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+          enable-cache: false
+
+      # Exactly the locked runtime and development packages, with hashes; `--locked` fails
+      # instead of re-resolving if uv.lock is out of date.
+      - name: Export the locked dependencies
+        run: |
+          mkdir -p reports/security
+          uv export --locked --all-groups --no-emit-project --format requirements-txt \
+            --output-file reports/security/requirements.txt
+
+      - name: Audit the locked dependencies
+        run: |
+          status=0
+          uvx "pip-audit@${PIP_AUDIT_VERSION}" \
+            --requirement reports/security/requirements.txt \
+            --disable-pip --require-hashes --progress-spinner off \
+            --format json --output reports/security/pip-audit.json || status=$?
+          echo "pip-audit exit status: ${status} (0: none found, 1: vulnerabilities found)"
+
+      - name: Summarize audit findings
+        if: ${{ !cancelled() }}
+        run: |
+          uv run --no-project python -I - <<'EOF'
+          import json
+          import os
+          from pathlib import Path
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          report = Path("reports/security/pip-audit.json")
+          lines = ["## Dependency audit (advisory)", ""]
+          if not report.is_file():
+              print("::warning::The dependency audit did not produce a report; see the audit step log.")
+              lines.append("The audit did not complete, so no result is available.")
+          else:
+              data = json.loads(report.read_text(encoding="utf-8"))
+              findings = [
+                  (dep["name"], dep["version"], vuln["id"], vuln.get("fix_versions") or [])
+                  for dep in data.get("dependencies", [])
+                  for vuln in dep.get("vulns", [])
+              ]
+              fixable = [f for f in findings if f[3]]
+              unfixed = [f for f in findings if not f[3]]
+              lines.append(
+                  f"{len(data.get('dependencies', []))} locked packages audited: "
+                  f"{len(fixable)} vulnerabilities with a fixed release (actionable), "
+                  f"{len(unfixed)} without one (track upstream)."
+              )
+              if findings:
+                  lines += ["", "| Package | Version | Advisory | Fixed in |", "|---|---|---|---|"]
+                  for name, version, advisory, fixes in findings:
+                      lines.append(f"| {name} | {version} | {advisory} | {', '.join(fixes) or 'no fix yet'} |")
+              for name, version, advisory, fixes in fixable:
+                  print(f"::warning::{name} {version} has {advisory}; fixed in {', '.join(fixes)}.")
+              for name, version, advisory, _ in unfixed:
+                  print(f"::notice::{name} {version} has {advisory}; no fixed release yet.")
+          text = "\n".join(lines) + "\n"
+          print(text, end="")
+          with summary.open("a", encoding="utf-8") as out:
+              out.write(text)
+          EOF
+
+      - name: Upload the audit report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-audit
+          path: reports/security/
+          if-no-files-found: warn
+          retention-days: 14
+
+  workflow-audit:
+    name: Workflow security lint (zizmor, advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      # Offline audits only: no token is given, so nothing is fetched from the GitHub API.
+      - name: Audit the workflows and Dependabot configuration
+        run: |
+          status=0
+          uvx "zizmor@${ZIZMOR_VERSION}" --offline --format plain .github || status=$?
+          if [[ "${status}" -ne 0 ]]; then
+            echo "::warning::zizmor reported workflow findings (exit status ${status}); see this step's log."
+          fi
