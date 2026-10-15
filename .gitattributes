@@ -1,0 +1,8 @@
+# Store text files with LF line endings and check them out with LF on every platform, so
+# commits from Windows and Linux match and diffs show no line-ending noise.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

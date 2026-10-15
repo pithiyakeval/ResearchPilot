@@ -1,6 +1,7 @@
 """Deterministic test doubles; no Ollama server or network access is used."""
 
 import json
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Self
@@ -9,8 +10,13 @@ from langchain_core.messages import AIMessage
 from mcp.types import CallToolResult, TextContent
 
 from researchpilot.api.history import HistoryState, HistoryStatus
+from researchpilot.api.jobs import JobInput
 from researchpilot.history.records import FinishedJob, HistoryRecord, QueuedJob, StartedJob
 from researchpilot.history.store import HistoryUnavailableError
+
+# Upper bound for the shared research double's wait, so a test that never releases a job
+# fails instead of hanging.
+RESEARCH_TIMEOUT = 5.0
 
 
 class ScriptedModel:
@@ -248,3 +254,38 @@ class FakeHistory:
     def close(self) -> None:
         self.events.append("close")
         self.closed = True
+
+
+class Research:
+    """Research double; with ``block``, each call waits until ``release`` is set."""
+
+    def __init__(self, *, error: BaseException | None = None, block: bool = False) -> None:
+        self.error = error
+        self.started = threading.Event()
+        self.release = threading.Event()
+        if not block:
+            self.release.set()
+        self.inputs: list[JobInput] = []
+
+    @property
+    def calls(self) -> int:
+        return len(self.inputs)
+
+    def __call__(self, job_input: JobInput) -> object:
+        self.inputs.append(job_input)
+        self.started.set()
+        assert self.release.wait(RESEARCH_TIMEOUT), "test never released the job"
+        if self.error is not None:
+            raise self.error
+        return object()
+
+
+class Probe:
+    """Readiness probe double: Ollama always answers."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return True

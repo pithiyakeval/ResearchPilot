@@ -30,6 +30,7 @@ build/
 # Editor and OS files
 .vscode/
 .idea/
+.codex/
 .DS_Store
 Thumbs.db
 

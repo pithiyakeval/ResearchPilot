@@ -20,10 +20,11 @@ Configure under **Settings → Rules → Rulesets** (or **Branches → Branch pr
   - `Package build`
 - Block force pushes and deletion of `main`.
 
-All six checks passed on commit `3afca57`. A check can only be selected as required after it
-has reported at least once, so add any renamed or new job after its first run. Do **not**
-make the advisory Security jobs required: they never fail by design, and making them
-required would add no protection.
+All six checks pass on `main`; confirm the latest run on the **Actions** tab before marking
+them required. A check can only be selected as required after it has reported at least
+once, so add any renamed or new job after its first run. Do **not** make the advisory
+Security jobs required: they never fail by design, and making them required would add no
+protection.
 
 ## Security settings
 

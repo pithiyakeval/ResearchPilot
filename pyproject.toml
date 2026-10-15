@@ -1,12 +1,13 @@
 [project]
 name = "researchpilot"
 version = "0.1.0"
-description = "A source-grounded AI research assistant built with Python and LangChain."
+description = "Local-first, source-grounded research assistant: a LangGraph workflow on Ollama, with a CLI and a FastAPI job API backed by PostgreSQL history."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.15,<2",
     "fastapi>=0.139,<0.140",
+    "httpx>=0.27,<1.0",
     "langchain-core>=1.0.0",
     "langchain-ollama>=1.1.0",
     "langgraph>=1.2.15",
@@ -16,6 +17,7 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "rich>=13.9.0",
     "sqlalchemy>=2.0.40,<2.1",
+    "starlette>=0.46,<2",
     "typer>=0.15.0",
     "uvicorn>=0.54,<1.0",
 ]
