@@ -29,6 +29,7 @@ from fakes import ScriptedModel, complete
 from pydantic import ValidationError
 from sqlalchemy import CheckConstraint
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import psycopg as postgresql_psycopg
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.schema import CreateIndex, CreateTable
 
@@ -294,7 +295,9 @@ def test_errors_are_described_by_type_and_sqlstate_only() -> None:
 
 
 def compiled(statement) -> str:
-    return normalized(statement.compile(dialect=postgresql.dialect()))
+    # The psycopg (v3) dialect the application uses, not SQLAlchemy's default PostgreSQL
+    # dialect, which changed from psycopg2 to psycopg in SQLAlchemy 2.1.
+    return normalized(statement.compile(dialect=postgresql_psycopg.dialect()))
 
 
 def test_history_pages_use_a_keyset_on_created_at_and_id() -> None:
@@ -304,8 +307,11 @@ def test_history_pages_use_a_keyset_on_created_at_and_id() -> None:
     order = "ORDER BY research_jobs.created_at DESC, research_jobs.id DESC LIMIT"
     assert order in first and order in after
     assert "(research_jobs.created_at, research_jobs.id) <" not in first
+    # Bound parameters, not inlined values; the psycopg dialect may add a type cast to each.
     assert re.search(
-        r"\(research_jobs\.created_at, research_jobs\.id\) < \(%\(\w+\)s, %\(\w+\)s\)", after
+        r"\(research_jobs\.created_at, research_jobs\.id\) < "
+        r"\(%\(\w+\)s(?:::[A-Z ]+)?, %\(\w+\)s(?:::[A-Z ]+)?\)",
+        after,
     )
 
 
