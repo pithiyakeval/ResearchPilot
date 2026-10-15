@@ -170,3 +170,222 @@ jobs:
             reports/ci/coverage.xml
           if-no-files-found: warn
           retention-days: 14
+
+  postgres-tests:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    # A fresh, disposable PostgreSQL for this job only. The credentials are CI-only test
+    # values, not secrets; nothing here can reach a developer or production database.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: researchpilot
+          POSTGRES_PASSWORD: researchpilot-ci-only
+          POSTGRES_DB: researchpilot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username researchpilot --dbname researchpilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Neutral names: each step maps only the URL it needs to the variable the code reads,
+      # so the tests never see the migration database as the application's database.
+      CI_TEST_DATABASE_URL: postgresql+psycopg://researchpilot:researchpilot-ci-only@localhost:5432/researchpilot_test
+      CI_MIGRATION_DATABASE_URL: postgresql+psycopg://researchpilot:researchpilot-ci-only@localhost:5432/researchpilot_ci
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python 3.13
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      # Refuses to continue unless both URLs point at this job's service, then creates the
+      # second database used only by the Alembic round trip.
+      - name: Check database targets and create the migration database
+        run: |
+          uv run --locked python - <<'EOF'
+          import os
+          import sys
+
+          import psycopg
+          from psycopg import sql
+          from sqlalchemy.engine import make_url
+
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          def service_url(name: str):
+              raw = os.environ.get(name)
+              if not raw:
+                  fail(f"{name} is not set.")
+              url = make_url(raw)
+              if url.drivername != "postgresql+psycopg":
+                  fail(f"{name} must use postgresql+psycopg://.")
+              if url.host not in ("localhost", "127.0.0.1") or url.port != 5432:
+                  fail(f"{name} must target this job's PostgreSQL service on localhost:5432.")
+              return url
+
+
+          test = service_url("CI_TEST_DATABASE_URL")
+          migration = service_url("CI_MIGRATION_DATABASE_URL")
+          if "test" not in (test.database or ""):
+              fail("The test database name must contain 'test', as the test fixtures require.")
+          if migration.database == test.database:
+              fail("The migration round trip must use a different database from the tests.")
+
+          with psycopg.connect(
+              host=test.host,
+              port=test.port,
+              user=test.username,
+              password=test.password,
+              dbname=test.database,
+              autocommit=True,
+          ) as connection:
+              encoding = connection.execute("SHOW server_encoding").fetchone()[0]
+              if encoding != "UTF8":
+                  fail(f"The service database encoding is {encoding}; the history layer needs UTF8.")
+              exists = connection.execute(
+                  "SELECT 1 FROM pg_database WHERE datname = %s", (migration.database,)
+              ).fetchone()
+              if exists:
+                  fail("The migration database already exists; this job only uses a fresh service.")
+              connection.execute(
+                  sql.SQL("CREATE DATABASE {}").format(sql.Identifier(migration.database))
+              )
+          print(
+              f"Targets verified on localhost:5432 (UTF8): tests use {test.database}, "
+              f"the Alembic round trip uses {migration.database}."
+          )
+          EOF
+        env:
+          CI_TEST_DATABASE_URL: ${{ env.CI_TEST_DATABASE_URL }}
+          CI_MIGRATION_DATABASE_URL: ${{ env.CI_MIGRATION_DATABASE_URL }}
+
+      # The integration tests migrate through a passed-in connection, so this exercises the
+      # operator path instead: alembic.ini and env.py reading RESEARCHPILOT_DATABASE_URL.
+      - name: Migration round trip through alembic.ini (upgrade, downgrade, upgrade)
+        env:
+          RESEARCHPILOT_DATABASE_URL: ${{ env.CI_MIGRATION_DATABASE_URL }}
+        run: |
+          expected="$(uv run --locked python -c 'from researchpilot.history import EXPECTED_SCHEMA_REVISION as r; print(r)')"
+
+          check_at_head() {
+            current="$(uv run --locked alembic current --check-heads)"
+            echo "Current revision: ${current}"
+            if [[ "${current%% *}" != "${expected}" ]]; then
+              echo "::error::Expected revision ${expected} after upgrade, found '${current}'."
+              exit 1
+            fi
+          }
+
+          uv run --locked alembic upgrade head
+          check_at_head
+
+          uv run --locked alembic downgrade base
+          after_downgrade="$(uv run --locked alembic current)"
+          if [[ -n "${after_downgrade}" ]]; then
+            echo "::error::Expected no revision after downgrading to base, found '${after_downgrade}'."
+            exit 1
+          fi
+          echo "Downgraded to base."
+
+          uv run --locked alembic upgrade head
+          check_at_head
+
+      - name: Run PostgreSQL integration tests
+        id: tests
+        env:
+          RESEARCHPILOT_TEST_DATABASE_URL: ${{ env.CI_TEST_DATABASE_URL }}
+        run: uv run --locked pytest -m postgres -ra --junit-xml=reports/ci/junit.xml
+
+      # Fails unless every collected PostgreSQL test ran: a missing URL or a wrong marker
+      # must never pass as a green job with zero tests or skipped tests.
+      - name: Summarize and verify PostgreSQL test results
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        run: |
+          uv run --locked python - <<'EOF'
+          import os
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          junit = Path("reports/ci/junit.xml")
+
+
+          def report(lines: list[str]) -> None:
+              text = "\n".join(lines) + "\n"
+              print(text, end="")
+              with summary.open("a", encoding="utf-8") as out:
+                  out.write(text)
+
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              report([f"**{message}**"])
+              sys.exit(1)
+
+
+          collected = subprocess.run(
+              [sys.executable, "-m", "pytest", "-m", "postgres", "--collect-only", "-q",
+               "-p", "no:cacheprovider"],
+              capture_output=True,
+              text=True,
+          )
+          expected = sum("::" in line for line in collected.stdout.splitlines())
+          if expected == 0:
+              fail("No tests carry the 'postgres' marker; nothing would be checked.")
+
+          if not junit.is_file():
+              fail("The test command ran but produced no JUnit report at reports/ci/junit.xml.")
+          try:
+              root = ET.parse(junit).getroot()
+          except ET.ParseError:
+              fail("The JUnit report at reports/ci/junit.xml could not be parsed.")
+          suites = [suite for suite in root.iter("testsuite") if suite.find("testsuite") is None]
+          if not suites:
+              fail("The JUnit report at reports/ci/junit.xml contains no test suites.")
+          keys = ("tests", "failures", "errors", "skipped")
+          totals = {key: sum(int(suite.get(key) or 0) for suite in suites) for key in keys}
+
+          report([
+              "| Collected | Tests in report | Failures | Errors | Skipped |",
+              "|---|---|---|---|---|",
+              "| {collected} | {tests} | {failures} | {errors} | {skipped} |".format(
+                  collected=expected, **totals
+              ),
+          ])
+          if totals["tests"] != expected:
+              fail(f"{expected} PostgreSQL tests were collected but {totals['tests']} were reported.")
+          if totals["skipped"]:
+              fail(f"{totals['skipped']} PostgreSQL tests were skipped; all must run in this job.")
+          EOF
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: postgres-tests-ubuntu-24.04-py3.13
+          path: reports/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
