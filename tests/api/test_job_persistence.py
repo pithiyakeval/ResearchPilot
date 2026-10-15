@@ -9,7 +9,7 @@ import threading
 
 import httpx
 import pytest
-from fakes import FakeHistory, ScriptedModel, complete
+from fakes import FakeHistory, Research, ScriptedModel, complete
 from fastapi.testclient import TestClient
 
 from researchpilot.api import create_app
@@ -62,30 +62,6 @@ def result() -> ResearchResult:
         model_factory=lambda _settings, **_kwargs: model,
     )
     return build_result(outcome, settings)
-
-
-class Research:
-    """Research double; with ``block``, each call waits until ``release`` is set."""
-
-    def __init__(self, *, error: BaseException | None = None, block: bool = False) -> None:
-        self.error = error
-        self.started = threading.Event()
-        self.release = threading.Event()
-        if not block:
-            self.release.set()
-        self.inputs: list[JobInput] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.inputs)
-
-    def __call__(self, job_input: JobInput) -> object:
-        self.inputs.append(job_input)
-        self.started.set()
-        assert self.release.wait(TIMEOUT), "test never released the job"
-        if self.error is not None:
-            raise self.error
-        return object()
 
 
 @pytest.fixture

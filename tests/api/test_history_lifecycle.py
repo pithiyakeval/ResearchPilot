@@ -12,7 +12,7 @@ import threading
 import httpx
 import psycopg
 import pytest
-from fakes import FakeHistory
+from fakes import FakeHistory, Probe
 from fastapi.testclient import TestClient
 
 from researchpilot.api import create_app
@@ -59,15 +59,6 @@ class Research:
         self.started.set()
         assert self.release.wait(TIMEOUT), "test never released the job"
         return object()
-
-
-class Probe:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def __call__(self) -> bool:
-        self.calls += 1
-        return True
 
 
 @pytest.fixture(autouse=True)
