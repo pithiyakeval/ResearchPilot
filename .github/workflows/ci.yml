@@ -389,3 +389,86 @@ jobs:
           path: reports/ci/junit.xml
           if-no-files-found: warn
           retention-days: 14
+
+  package-build:
+    name: Package build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python 3.13
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Builds with the hatchling backend declared in pyproject.toml; the project's runtime
+      # dependencies are neither resolved nor installed, so uv.lock is not touched.
+      - name: Build the source distribution and wheel
+        run: uv build --out-dir dist
+
+      # Every Alembic migration file in the source tree must be in the wheel at the same
+      # package path, or `alembic upgrade head` fails for anyone installing the package.
+      - name: Verify the wheel contains the Alembic migrations
+        run: |
+          uv run --no-project python -I - <<'EOF'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          dist = Path("dist")
+          wheels = sorted(dist.glob("researchpilot-*.whl"))
+          sdists = sorted(dist.glob("researchpilot-*.tar.gz"))
+          if len(wheels) != 1:
+              fail(f"Expected one researchpilot wheel in dist/, found {len(wheels)}.")
+          if len(sdists) != 1:
+              fail(f"Expected one researchpilot source distribution in dist/, found {len(sdists)}.")
+
+          # The wheel maps src/researchpilot/... to researchpilot/... (tool.hatch packages).
+          source = Path("src/researchpilot/history/migrations")
+          required = sorted(
+              "researchpilot/" + path.relative_to("src/researchpilot").as_posix()
+              for path in source.rglob("*")
+              if path.is_file()
+              and "__pycache__" not in path.parts
+              and path.suffix in {".py", ".mako"}
+          )
+          if not any(name.endswith("/script.py.mako") for name in required):
+              fail("The source tree has no Alembic script.py.mako; check the migration layout.")
+          if not any("/versions/" in name for name in required):
+              fail("The source tree has no Alembic revision files; check the migration layout.")
+
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              contents = set(wheel.namelist())
+          missing = [name for name in required if name not in contents]
+          if missing:
+              fail(f"{wheels[0].name} is missing migration files: {', '.join(missing)}")
+
+          print(f"{wheels[0].name} and {sdists[0].name} built.")
+          print(f"All {len(required)} migration files are in the wheel:")
+          for name in required:
+              print(f"  {name}")
+          EOF
+
+      - name: Upload the built distributions
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: researchpilot-dist
+          path: dist/
+          if-no-files-found: warn
+          retention-days: 14
